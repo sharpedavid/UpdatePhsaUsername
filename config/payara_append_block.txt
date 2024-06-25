@@ -1,10 +1,16 @@
 
-resource "keycloak_openid_user_attribute_protocol_mapper" "phsa_windowsaccountname" {
-  add_to_id_token = false
-  add_to_userinfo = false
-  claim_name      = "preferred_username"
-  client_id       = module.payara-client.CLIENT.id
-  name            = "phsa_windowsaccountname"
-  user_attribute  = "phsa_windowsaccountname"
+resource "keycloak_generic_client_protocol_mapper" "phsa_windowsaccountname" {
   realm_id        = module.payara-client.CLIENT.realm_id
+  client_id       = module.payara-client.CLIENT.id
+  name            = "preferred_username"
+  protocol        = "openid-connect"
+  protocol_mapper = "oidc-override-usermodel-attribute-mapper"
+  config = {
+    "userinfo.token.claim" : "false",
+    "user.attribute" : "phsa_windowsaccountname",
+    "id.token.claim" : "true",
+    "access.token.claim" : "true",
+    "claim.name" : "preferred_username",
+    "jsonType.label" : "String"
+  }
 }

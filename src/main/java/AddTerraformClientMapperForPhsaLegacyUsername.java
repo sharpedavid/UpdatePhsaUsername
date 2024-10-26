@@ -14,10 +14,11 @@ import java.util.regex.Pattern;
 
 public class AddTerraformClientMapperForPhsaLegacyUsername {
 
-    private static String baseDir = "C:\\Dev\\IdeaProjects\\moh-keycloak-client-configurations-2023\\keycloak-dev\\realms\\moh_applications\\clients";
-    private static String clientNamesFile = "C:\\Dev\\IdeaProjects\\PhsaUsernameMapper\\config\\dev_client_names.txt";
-    private static String payaraTextFile = "C:\\Dev\\IdeaProjects\\PhsaUsernameMapper\\config\\payara_append_block.txt";
-    private static String defaultTextFile = "C:\\Dev\\IdeaProjects\\PhsaUsernameMapper\\config\\append_block.txt";
+    // C:\Users\david.a.sharpe\IdeaProjects\moh-keycloak-client-configurations
+    private static String baseDir = "C:\\Users\\david.a.sharpe\\IdeaProjects\\moh-keycloak-client-configurations\\keycloak-prod\\realms\\moh_applications\\clients";
+    private static String clientNamesFile = "C:\\Users\\david.a.sharpe\\IdeaProjects\\UpdatePhsaUsername\\config\\prod_client_names.txt";
+    private static String payaraTextFile = "C:\\Users\\david.a.sharpe\\IdeaProjects\\UpdatePhsaUsername\\config\\payara_append_block.txt";
+    private static String defaultTextFile = "C:\\Users\\david.a.sharpe\\IdeaProjects\\UpdatePhsaUsername\\config\\append_block.txt";
 
     private static Logger LOGGER = Logger.getLogger(AddTerraformClientMapperForPhsaLegacyUsername.class.getName());
 

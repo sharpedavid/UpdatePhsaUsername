@@ -3,93 +3,138 @@ import org.keycloak.admin.client.KeycloakBuilder;
 import org.keycloak.representations.idm.FederatedIdentityRepresentation;
 import org.keycloak.representations.idm.UserRepresentation;
 
-import java.util.HashMap;
-import java.util.List;
-import java.util.Map;
-import java.util.Optional;
-import java.util.logging.ConsoleHandler;
-import java.util.logging.Handler;
-import java.util.logging.Level;
-import java.util.logging.Logger;
+import jakarta.ws.rs.ForbiddenException;
+import jakarta.ws.rs.NotAuthorizedException;
+import jakarta.ws.rs.ProcessingException;
+
+import java.util.*;
+import java.util.logging.*;
 
 public class StorePhsaLegacyUsernameAsUserAttribute {
-
-    // PROD
-    private static final String SERVER_URL = "https://common-logon.hlth.gov.bc.ca/auth";
-    private static final String REALM = "moh_applications";
-    private static final String CLIENT_ID = "DAVIDSHARPE_25SEPT24_PROD_DELETEME";
-    private static final String CLIENT_SECRET_ENV = "DAVIDSHARPE_25SEPT24_PROD_DELETEME";
-
-    // TEST
-//    private static final String SERVER_URL = "https://common-logon-test.hlth.gov.bc.ca/auth";
-//    private static final String REALM = "moh_applications";
-//    private static final String CLIENT_ID = "DAVIDSHARPE_25SEPT24_DELETEME";
-//    private static final String CLIENT_SECRET_ENV = "DAVIDSHARPE_25SEPT24_DELETEME";
 
     private static final Logger LOGGER = Logger.getLogger(StorePhsaLegacyUsernameAsUserAttribute.class.getName());
 
     static {
         LOGGER.setUseParentHandlers(false);
-        LOGGER.setLevel(Level.FINEST);
+        LOGGER.setLevel(Level.INFO);
         Handler consoleHandler = new ConsoleHandler();
-        consoleHandler.setLevel(Level.FINEST);
+        consoleHandler.setLevel(Level.ALL);
         LOGGER.addHandler(consoleHandler);
     }
 
-    public static void main(String[] args) {
-        Keycloak keycloak = KeycloakBuilder.builder()
-                .serverUrl(SERVER_URL)
-                .realm(REALM)
-                .grantType("client_credentials")
-                .clientId(CLIENT_ID)
-                .clientSecret(System.getenv(CLIENT_SECRET_ENV))
-                .build();
+    private static boolean SIMULATION_MODE = true;
 
-        updateUsers(keycloak);
+    public static void main(String[] args) {
+        if (args.length > 0 && args[0].equalsIgnoreCase("--real")) {
+            SIMULATION_MODE = false;
+        }
+
+        EnvConfig env = EnvConfig.TEST; // change or pass via args if you want
+        Keycloak keycloak = authenticate(env);
+
+        preflight(keycloak, env);
+
+        updateUsers(keycloak, env);
+
+        keycloak.close();
     }
 
-    private static void updateUsers(Keycloak keycloak) {
-        int batchSize = 1000;  // Number of users to retrieve at once
-        int startIndex = 0;    // Index to start retrieving users from
+    private static void updateUsers(Keycloak keycloak, EnvConfig env) {
+        int batchSize = 1000;
+        int startIndex = 0;
         boolean moreUsers = true;
 
-        // TODO: This takes hours to run if the user count is high. Consider parallelization.
+        LOGGER.info(() -> "Running in " + (SIMULATION_MODE ? "SIMULATION" : "REAL") +
+                " mode against " + env.name());
+
         while (moreUsers) {
-            List<UserRepresentation> users = keycloak.realm(REALM).users().list(startIndex, batchSize);
+            List<UserRepresentation> users = keycloak.realm(env.realm).users().list(startIndex, batchSize);
 
-            LOGGER.log(Level.FINER, "Processing users from {0} to {1}.", new Object[]{startIndex, startIndex + batchSize});
-
-            // Check if we have no more users
             if (users.isEmpty()) {
                 moreUsers = false;
                 continue;
             }
 
-            users.forEach(user -> {
+            final int from = startIndex;
+            final int to = startIndex + batchSize;
+            LOGGER.fine(() -> "Processing users from " + from + " to " + to);
 
-//                LOGGER.log(Level.FINEST, "Processing user: {0}, {1}.", new Object[]{user.getUsername(), user.getId()});
-
-                List<FederatedIdentityRepresentation> federatedIdentities = keycloak.realm(REALM).users().get(user.getId()).getFederatedIdentity();
+            for (UserRepresentation user : users) {
+                List<FederatedIdentityRepresentation> federatedIdentities =
+                        keycloak.realm(env.realm).users().get(user.getId()).getFederatedIdentity();
 
                 Optional<FederatedIdentityRepresentation> phsaIdentity = federatedIdentities.stream()
                         .filter(identity -> "phsa".equals(identity.getIdentityProvider()))
                         .findFirst();
 
-                if (phsaIdentity.isPresent() && (user.getAttributes() == null || !user.getAttributes().containsKey("phsa_windowsaccountname"))) {
+                boolean hasAttr = user.getAttributes() != null && user.getAttributes().containsKey("phsa_windowsaccountname");
 
-                    LOGGER.log(Level.FINER, "PHSA user identified: {0}.", user.getUsername());
+                if (phsaIdentity.isPresent() && !hasAttr) {
+                    LOGGER.finer(() -> "PHSA user identified: " + user.getUsername());
 
-                    Map<String, List<String>> attributes = Optional.ofNullable(user.getAttributes()).orElse(new HashMap<>());
+                    Map<String, List<String>> attributes =
+                            Optional.ofNullable(user.getAttributes()).orElse(new HashMap<>());
+
                     attributes.putIfAbsent("phsa_windowsaccountname", List.of(user.getUsername()));
                     user.setAttributes(attributes);
-                    // Uncomment this line when you're ready to perform the update
-                keycloak.realm(REALM).users().get(user.getId()).update(user);
-                }
-            });
 
-            // Update startIndex for the next batch
+                    if (SIMULATION_MODE) {
+                        LOGGER.info(() -> "[SIMULATION] Would update user " + user.getUsername());
+                    } else {
+                        keycloak.realm(env.realm).users().get(user.getId()).update(user);
+                        LOGGER.info(() -> "[REAL] Updated user " + user.getUsername());
+                    }
+                }
+            }
+
             startIndex += batchSize;
         }
     }
 
+    private static void preflight(Keycloak keycloak, EnvConfig env) {
+        LOGGER.info("Running preflight checks...");
+        try {
+            keycloak.tokenManager().grantToken();
+            keycloak.realm(env.realm).users().count();
+        } catch (ProcessingException | NotAuthorizedException e) {
+            throw new RuntimeException("Authentication failed in " + env.name(), e);
+        } catch (ForbiddenException e) {
+            throw new RuntimeException("Missing permissions in " + env.name(), e);
+        }
+        LOGGER.info("Preflight OK.");
+    }
+
+    private static Keycloak authenticate(EnvConfig env) {
+        if (env.clientSecret.isEmpty()) {
+            throw new IllegalStateException("Missing secret for " + env.clientId +
+                    ". Set env var: " + env.clientId);
+        }
+        return KeycloakBuilder.builder()
+                .serverUrl(env.url)
+                .realm(env.realm)
+                .clientId(env.clientId)
+                .clientSecret(env.clientSecret)
+                .grantType("client_credentials")
+                .build();
+    }
+
+    enum EnvConfig {
+        DEV("https://common-logon-dev.hlth.gov.bc.ca/auth", "moh_citizen", "BCMOHAD-30314-service-account"),
+        TEST("https://common-logon-test.hlth.gov.bc.ca/auth", "moh_citizen", "BCMOHAD-31351-service-account"),
+        PROD("https://common-logon.hlth.gov.bc.ca/auth", "moh_applications", "SOME_PROD_CLIENT");
+
+        public final String url;
+        public final String realm;
+        public final String clientId;
+        public final String clientSecret;
+
+        EnvConfig(String url, String realm, String clientId) {
+            this.url = url;
+            this.realm = realm;
+            this.clientId = clientId;
+            this.clientSecret = System.getenv(clientId);
+        }
+
+        public boolean isProd() { return this == PROD; }
+    }
 }
